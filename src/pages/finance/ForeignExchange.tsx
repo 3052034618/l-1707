@@ -43,35 +43,6 @@ const currencyPairs: SelectOption[] = [
   { value: 'AUD-CNY', label: '澳元 / 人民币 (AUD/CNY)' },
 ];
 
-const mockDeclarations: ForeignExchangeDeclaration[] = [
-  {
-    id: 'forex_001',
-    paymentApplicationId: 'payapp_002',
-    declarationNo: 'FX-2026-0000001',
-    declarationDate: '2026-06-13T10:00:00Z',
-    amount: 15800.0,
-    currency: 'EUR',
-    exchangeRate: 7.8945,
-    receiptUrl: '/receipts/forex_001.pdf',
-    status: 'approved',
-    createdAt: '2026-06-13T10:00:00Z',
-    updatedAt: '2026-06-13T14:30:00Z',
-  },
-  {
-    id: 'forex_002',
-    paymentApplicationId: 'payapp_003',
-    declarationNo: 'FX-2026-0000002',
-    declarationDate: '2026-06-07T11:00:00Z',
-    amount: 8900.0,
-    currency: 'USD',
-    exchangeRate: 7.2568,
-    receiptUrl: '/receipts/forex_002.pdf',
-    status: 'submitted',
-    createdAt: '2026-06-07T11:00:00Z',
-    updatedAt: '2026-06-07T11:00:00Z',
-  },
-];
-
 const generateExchangeRateHistory = (baseRate: number, days: number) => {
   const data = [];
   let rate = baseRate;
@@ -92,8 +63,13 @@ const generateExchangeRateHistory = (baseRate: number, days: number) => {
 
 export default function ForeignExchange() {
   const [searchParams] = useSearchParams();
-  const { getExchangeRate, generateForeignExchangeDeclaration } = useFinanceStore();
-  const [declarations] = useState<ForeignExchangeDeclaration[]>(mockDeclarations);
+  const { 
+    getExchangeRate, 
+    generateForeignExchangeDeclaration, 
+    foreignExchangeDeclarations, 
+    paymentApplications,
+    generateElectronicReceipt 
+  } = useFinanceStore();
   const [selectedDeclaration, setSelectedDeclaration] = useState<ForeignExchangeDeclaration | null>(null);
   const [showReceipt, setShowReceipt] = useState(false);
   const [currencyPair, setCurrencyPair] = useState('USD-CNY');
@@ -137,6 +113,7 @@ export default function ForeignExchange() {
 
   const handleGenerateDeclaration = async (paymentId: string) => {
     const declaration = await generateForeignExchangeDeclaration(paymentId);
+    await generateElectronicReceipt(declaration.id);
     setSelectedDeclaration(declaration);
     setShowReceipt(true);
   };
@@ -152,12 +129,15 @@ export default function ForeignExchange() {
   };
 
   const getPaymentInfo = (paymentAppId: string) => {
-    const paymentMap: Record<string, { no: string; payee: string; purpose: string }> = {
-      'payapp_001': { no: 'PAY-2026-0000001', payee: '万达制造有限公司', purpose: '货款支付' },
-      'payapp_002': { no: 'PAY-2026-0000002', payee: '德国电子科技公司', purpose: '货款支付' },
-      'payapp_003': { no: 'PAY-2026-0000003', payee: '中远海运集装箱运输有限公司', purpose: '运费支付' },
-    };
-    return paymentMap[paymentAppId] || { no: paymentAppId, payee: '-', purpose: '-' };
+    const paymentApp = paymentApplications.find((p) => p.id === paymentAppId);
+    if (paymentApp) {
+      return {
+        no: paymentApp.applicationNo,
+        payee: paymentApp.payee,
+        purpose: paymentApp.purpose,
+      };
+    }
+    return { no: paymentAppId, payee: '-', purpose: '-' };
   };
 
   const columns: TableColumn<ForeignExchangeDeclaration>[] = [
@@ -304,13 +284,13 @@ export default function ForeignExchange() {
           />
           <StatCard
             title="本月申报笔数"
-            value={declarations.length}
+            value={foreignExchangeDeclarations.length}
             icon={<FileCheck className="w-6 h-6" />}
             color="success"
           />
           <StatCard
             title="本月申报总额"
-            value={declarations.reduce((sum, d) => sum + d.amount * d.exchangeRate, 0)}
+            value={foreignExchangeDeclarations.reduce((sum, d) => sum + d.amount * d.exchangeRate, 0)}
             icon={<Globe className="w-6 h-6" />}
             color="warning"
           />
@@ -327,7 +307,7 @@ export default function ForeignExchange() {
           <Card.Body className="p-0">
             <Table
               columns={columns}
-              dataSource={declarations}
+              dataSource={foreignExchangeDeclarations}
               rowKey="id"
               onRowClick={(record) => {
                 setSelectedDeclaration(record);
@@ -336,7 +316,7 @@ export default function ForeignExchange() {
               pagination={{
                 current: 1,
                 pageSize: 10,
-                total: declarations.length,
+                total: foreignExchangeDeclarations.length,
                 onChange: () => {},
               }}
             />

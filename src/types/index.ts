@@ -113,6 +113,21 @@ export interface LicenseRequirement {
   expiryDate?: string;
 }
 
+export type LicenseStatus = 'active' | 'expiring_soon' | 'expired';
+
+export interface License extends BaseEntity {
+  licenseType: string;
+  licenseName: string;
+  licenseNo: string;
+  issueDate: string;
+  expiryDate: string;
+  status: LicenseStatus;
+  holder: string;
+  issuingAuthority: string;
+  declarationIds: string[];
+  fileUrl?: string;
+}
+
 export interface CustomsDeclaration extends BaseEntity {
   orderId: string;
   declarationNo: string;

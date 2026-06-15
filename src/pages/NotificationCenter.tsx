@@ -184,7 +184,7 @@ const isInTimeRange = (date: string, filter: TimeFilter): boolean => {
 export default function NotificationCenter() {
   const navigate = useNavigate();
   const user = useAuthStore((state) => state.user);
-  const { notifications, markAsRead, markAllAsRead } = useNotificationStore();
+  const { notifications, markAsRead, markAllAsRead, deleteNotification, deleteNotifications } = useNotificationStore();
   const [selectedCategory, setSelectedCategory] = useState<CategoryKey>('all');
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
   const [searchText, setSearchText] = useState('');
@@ -296,14 +296,17 @@ export default function NotificationCenter() {
     }
   }, [user, markAllAsRead]);
 
-  const handleDelete = useCallback((id: string) => {
-    console.log('Delete notification:', id);
-  }, []);
+  const handleDelete = useCallback(
+    async (id: string) => {
+      await deleteNotification(id);
+    },
+    [deleteNotification]
+  );
 
-  const handleBatchDelete = useCallback(() => {
-    console.log('Batch delete notifications:', selectedIds);
+  const handleBatchDelete = useCallback(async () => {
+    await deleteNotifications(Array.from(selectedIds));
     setSelectedIds(new Set());
-  }, [selectedIds]);
+  }, [selectedIds, deleteNotifications]);
 
   const openDetail = useCallback(
     (notification: Notification) => {

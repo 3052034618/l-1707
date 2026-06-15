@@ -10,7 +10,7 @@ import Button from '@/components/Button';
 import Input from '@/components/Input';
 import Select, { type SelectOption } from '@/components/Select';
 import Alert from '@/components/Alert';
-import { useOrderStore } from '@/store';
+import { useOrderStore, useLetterOfCreditStore } from '@/store';
 import { OrderService } from '@/services';
 import type { TradeTerm, Order } from '@/types';
 import { cn } from '@/lib/utils';
@@ -130,12 +130,13 @@ interface TariffResult {
 export default function OrderNew() {
   const navigate = useNavigate();
   const { createOrder, loading } = useOrderStore();
+  const { generateDraft: generateLCDraft } = useLetterOfCreditStore();
   const [currentStep, setCurrentStep] = useState(0);
   const [tariffResult, setTariffResult] = useState<TariffResult | null>(null);
   const [hsSuggestions, setHsSuggestions] = useState<typeof hsCodeSuggestions>([]);
   const [showHsSuggestions, setShowHsSuggestions] = useState(false);
 
-  const { control, handleSubmit, watch, formState: { errors }, getValues, trigger } = useForm<FormValues>({
+  const { control, handleSubmit, watch, formState: { errors }, getValues, trigger, setValue } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       tradeTerm: '',
@@ -222,7 +223,6 @@ export default function OrderNew() {
   };
 
   const handleHsSelect = (code: string, name: string) => {
-    const { setValue } = useForm<FormValues>();
     setValue('hsCode', code);
     if (!getValues('goodsDescription')) {
       setValue('goodsDescription', name);
@@ -278,8 +278,7 @@ export default function OrderNew() {
       const newOrder = await createOrder(orderData);
 
       if (values.generateLC) {
-        const { LetterOfCreditService } = await import('@/services');
-        await LetterOfCreditService.generateDraft(newOrder.id);
+        await generateLCDraft(newOrder.id);
       }
 
       navigate(`/importer/orders/${newOrder.id}`);
@@ -322,7 +321,6 @@ export default function OrderNew() {
                       field.onChange(e);
                       const selected = exporterOptions.find((opt) => opt.value === e.target.value);
                       if (selected) {
-                        const { setValue } = useForm<FormValues>();
                         setValue('exporterName', selected.label);
                       }
                     }}

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Package,
   Download,
@@ -19,7 +19,6 @@ import type { SelectOption } from '@/components/Select';
 import Button from '@/components/Button';
 import Card from '@/components/Card';
 import StatusBadge from '@/components/business/StatusBadge';
-import { DocumentService } from '@/services';
 import { useOrderStore, useDocumentStore } from '@/store';
 import type { Order, Document, DocumentType } from '@/types';
 
@@ -86,16 +85,19 @@ const getDocumentTypeIcon = (type: DocumentType) => {
 
 export default function DocumentPackage() {
   const { orders, getOrders } = useOrderStore();
-  const { documents, getDocuments } = useDocumentStore();
+  const { documents, getDocuments, generateElectronicPackage } = useDocumentStore();
   const [selectedOrderId, setSelectedOrderId] = useState<string>('');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [orderDocuments, setOrderDocuments] = useState<Document[]>([]);
   const [packageInfo, setPackageInfo] = useState<PackageInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [sending, setSending] = useState(false);
   const [orderOptions, setOrderOptions] = useState<SelectOption[]>([]);
   const [packageHistory, setPackageHistory] = useState<PackageHistory[]>([]);
+
+  const orderDocuments = useMemo(() => {
+    return documents.filter((d) => d.orderId === selectedOrderId && d.status === 'verified');
+  }, [documents, selectedOrderId]);
 
   useEffect(() => {
     loadOrders();
@@ -107,7 +109,6 @@ export default function DocumentPackage() {
     if (selectedOrderId) {
       loadDocuments(selectedOrderId);
     } else {
-      setOrderDocuments([]);
       setPackageInfo(null);
     }
   }, [selectedOrderId, orders]);
@@ -137,14 +138,14 @@ export default function DocumentPackage() {
     setLoading(true);
     try {
       const docs = await getDocuments(orderId);
-      setOrderDocuments(docs.filter((d) => d.status === 'verified'));
+      const verifiedDocs = docs.filter((d) => d.status === 'verified');
 
-      const mockPackageInfo: PackageInfo | null = docs.some((d) => d.status === 'verified')
+      const mockPackageInfo: PackageInfo | null = verifiedDocs.length > 0
         ? {
             packageName: `电子单证包_${orderId.slice(-8)}.zip`,
             packageUrl: `/api/packages/${orderId}/documents.zip`,
             generatedAt: new Date(Date.now() - 86400000).toISOString(),
-            documentCount: docs.filter((d) => d.status === 'verified').length,
+            documentCount: verifiedDocs.length,
             downloadCount: Math.floor(Math.random() * 5) + 1,
             sentToImporter: Math.random() > 0.5,
             sentAt:
@@ -200,7 +201,7 @@ export default function DocumentPackage() {
 
     setGenerating(true);
     try {
-      const result = await DocumentService.generateElectronicPackage(selectedOrderId);
+      const result = await generateElectronicPackage(selectedOrderId);
       const newPackageInfo: PackageInfo = {
         packageName: result.packageName,
         packageUrl: result.packageUrl,

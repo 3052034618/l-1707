@@ -5,12 +5,15 @@ import type {
   UserRole,
   Order,
   OrderStatus,
+  LetterOfCredit,
+  LCStatus,
   Document,
   DocumentType,
   VerificationResult,
   CustomsDeclaration,
   CustomsStatus,
   RegulatoryCondition,
+  License,
   LicenseRequirement,
   Shipment,
   ShipmentStatus,
@@ -29,10 +32,13 @@ import type {
 import {
   mockUsers,
   mockOrders,
+  mockLettersOfCredit,
   mockDocuments,
   mockCustomsDeclarations,
   mockShipments,
   mockSettlements,
+  mockPaymentApplications,
+  mockForeignExchangeDeclarations,
   mockNotifications,
   mockPerformanceReports,
 } from '@/mock/data';
@@ -248,10 +254,15 @@ export const useOrderStore = create<OrderState>()(
 
 interface DocumentState {
   documents: Document[];
+  selectedOrderId: string | null;
+  setSelectedOrderId: (orderId: string | null) => void;
   getDocuments: (orderId: string) => Promise<Document[]>;
-  uploadDocument: (orderId: string, file: File, type: DocumentType) => Promise<Document>;
+  getDocumentsByOrderId: (orderId: string) => Document[];
+  uploadDocument: (orderId: string, file: File, type: DocumentType, ocrData?: Record<string, any>) => Promise<Document>;
+  addDocuments: (orderId: string, docs: Document[]) => void;
   getDocument: (id: string) => Promise<Document | null>;
   verifyDocuments: (orderId: string) => Promise<VerificationResult>;
+  resolveDiscrepancy: (documentId: string, field: string, resolution: string) => Promise<void>;
   generateElectronicPackage: (orderId: string) => Promise<{ packageUrl: string; packageName: string }>;
 }
 
@@ -259,12 +270,19 @@ export const useDocumentStore = create<DocumentState>()(
   persist(
     (set, get) => ({
       documents: mockDocuments,
+      selectedOrderId: null,
+      setSelectedOrderId: (orderId: string | null) => {
+        set({ selectedOrderId: orderId });
+      },
       getDocuments: async (orderId: string): Promise<Document[]> => {
         await delay();
         const docs = get().documents.filter((d) => d.orderId === orderId);
         return docs;
       },
-      uploadDocument: async (orderId: string, file: File, type: DocumentType): Promise<Document> => {
+      getDocumentsByOrderId: (orderId: string): Document[] => {
+        return get().documents.filter((d) => d.orderId === orderId);
+      },
+      uploadDocument: async (orderId: string, file: File, type: DocumentType, ocrData?: Record<string, any>): Promise<Document> => {
         await delay();
         const now = new Date().toISOString();
         const newDocument: Document = {
@@ -276,6 +294,7 @@ export const useDocumentStore = create<DocumentState>()(
           fileSize: file.size,
           uploadedBy: useAuthStore.getState().user?.id || '',
           status: 'uploaded',
+          ocrData,
           createdAt: now,
           updatedAt: now,
         };
@@ -283,6 +302,14 @@ export const useDocumentStore = create<DocumentState>()(
           documents: [...state.documents, newDocument],
         }));
         return newDocument;
+      },
+      addDocuments: (orderId: string, docs: Document[]) => {
+        set((state) => {
+          const filteredDocs = state.documents.filter((d) => d.orderId !== orderId);
+          return {
+            documents: [...filteredDocs, ...docs],
+          };
+        });
       },
       getDocument: async (id: string): Promise<Document | null> => {
         await delay();
@@ -307,6 +334,37 @@ export const useDocumentStore = create<DocumentState>()(
         }));
         return result;
       },
+      resolveDiscrepancy: async (documentId: string, field: string, resolution: string) => {
+        await delay();
+        const now = new Date().toISOString();
+        set((state) => {
+          const doc = state.documents.find((d) => d.id === documentId);
+          if (!doc?.verificationResult) {
+            return state;
+          }
+          const updatedDiscrepancies = doc.verificationResult.discrepancies.map((d) =>
+            d.field === field ? { ...d, resolved: true } : d
+          );
+          const allResolved = updatedDiscrepancies.every((d) => d.resolved);
+          const updatedResult: VerificationResult = {
+            ...doc.verificationResult,
+            discrepancies: updatedDiscrepancies,
+            isPassed: allResolved,
+          };
+          return {
+            documents: state.documents.map((d) =>
+              d.id === documentId
+                ? {
+                    ...d,
+                    verificationResult: updatedResult,
+                    status: allResolved ? 'verified' : 'discrepancy_found',
+                    updatedAt: now,
+                  }
+                : d
+            ),
+          };
+        });
+      },
       generateElectronicPackage: async (orderId: string): Promise<{ packageUrl: string; packageName: string }> => {
         await delay();
         const order = mockOrders.find((o) => o.id === orderId);
@@ -326,6 +384,7 @@ export const useDocumentStore = create<DocumentState>()(
 interface CustomsState {
   declarations: CustomsDeclaration[];
   currentDeclaration: CustomsDeclaration | null;
+  licenses: License[];
   loading: boolean;
   getDeclarations: (params?: { status?: CustomsStatus; page?: number; pageSize?: number }) => Promise<void>;
   getDeclaration: (id: string) => Promise<CustomsDeclaration | null>;
@@ -334,13 +393,88 @@ interface CustomsState {
   checkRegulatoryConditions: (hsCode: string, originCountry: string) => Promise<RegulatoryCondition[]>;
   checkLicenseRequirements: (hsCode: string) => Promise<LicenseRequirement[]>;
   generateDeclarationMessage: (id: string) => Promise<{ messageContent: string; messageFormat: string }>;
+  getLicenses: () => Promise<License[]>;
+  addLicense: (data: Partial<License>) => Promise<License>;
+  updateLicense: (id: string, data: Partial<License>) => Promise<License>;
+  deleteLicense: (id: string) => Promise<void>;
+  associateLicenseToDeclaration: (licenseId: string, declarationId: string) => Promise<License>;
 }
+
+const calculateLicenseStatus = (expiryDate: string): License['status'] => {
+  const now = Date.now();
+  const expiry = new Date(expiryDate).getTime();
+  const diffDays = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
+  
+  if (diffDays <= 0) return 'expired';
+  if (diffDays <= 30) return 'expiring_soon';
+  return 'active';
+};
+
+const mockLicenses: License[] = [
+  {
+    id: 'lic_001',
+    licenseType: '3C认证',
+    licenseName: '中国强制性产品认证证书',
+    licenseNo: 'CCC2026010901123456',
+    issueDate: '2025-06-15T00:00:00Z',
+    expiryDate: '2028-06-30T00:00:00Z',
+    status: 'active',
+    holder: '华盛进出口贸易有限公司',
+    issuingAuthority: '中国认证认可监督管理委员会',
+    declarationIds: ['customs_001', 'customs_002'],
+    createdAt: '2025-06-15T00:00:00Z',
+    updatedAt: '2025-06-15T00:00:00Z',
+  },
+  {
+    id: 'lic_002',
+    licenseType: '入境通关单',
+    licenseName: '入境货物通关单',
+    licenseNo: 'SH2026061000123456',
+    issueDate: '2026-06-10T00:00:00Z',
+    expiryDate: '2026-07-10T00:00:00Z',
+    status: 'expiring_soon',
+    holder: '华盛进出口贸易有限公司',
+    issuingAuthority: '上海出入境检验检疫局',
+    declarationIds: ['customs_001'],
+    createdAt: '2026-06-10T00:00:00Z',
+    updatedAt: '2026-06-10T00:00:00Z',
+  },
+  {
+    id: 'lic_003',
+    licenseType: '进口许可证',
+    licenseName: '两用物项和技术进口许可证',
+    licenseNo: 'IMPORT202506001234',
+    issueDate: '2025-06-01T00:00:00Z',
+    expiryDate: '2026-06-01T00:00:00Z',
+    status: 'expired',
+    holder: '华盛进出口贸易有限公司',
+    issuingAuthority: '商务部',
+    declarationIds: [],
+    createdAt: '2025-06-01T00:00:00Z',
+    updatedAt: '2025-06-01T00:00:00Z',
+  },
+  {
+    id: 'lic_004',
+    licenseType: 'CCC认证',
+    licenseName: '车辆强制性认证证书',
+    licenseNo: 'CCC2024120901987654',
+    issueDate: '2024-12-15T00:00:00Z',
+    expiryDate: '2027-12-15T00:00:00Z',
+    status: 'active',
+    holder: '华盛进出口贸易有限公司',
+    issuingAuthority: '中国认证认可监督管理委员会',
+    declarationIds: ['customs_003'],
+    createdAt: '2024-12-15T00:00:00Z',
+    updatedAt: '2024-12-15T00:00:00Z',
+  },
+];
 
 export const useCustomsStore = create<CustomsState>()(
   persist(
     (set, get) => ({
       declarations: mockCustomsDeclarations,
       currentDeclaration: null,
+      licenses: mockLicenses,
       loading: false,
       getDeclarations: async (params?: { status?: CustomsStatus; page?: number; pageSize?: number }): Promise<void> => {
         set({ loading: true });
@@ -472,6 +606,145 @@ export const useCustomsStore = create<CustomsState>()(
           messageContent,
           messageFormat: 'XML',
         };
+      },
+      getLicenses: async (): Promise<License[]> => {
+        set({ loading: true });
+        await delay();
+        const updatedLicenses = get().licenses.map((lic) => ({
+          ...lic,
+          status: calculateLicenseStatus(lic.expiryDate),
+        }));
+        set({ licenses: updatedLicenses, loading: false });
+        return updatedLicenses;
+      },
+      addLicense: async (data: Partial<License>): Promise<License> => {
+        set({ loading: true });
+        await delay();
+        const now = new Date().toISOString();
+        const newLicense: License = {
+          id: generateId('lic'),
+          licenseType: data.licenseType || '',
+          licenseName: data.licenseName || '',
+          licenseNo: data.licenseNo || '',
+          issueDate: data.issueDate || now,
+          expiryDate: data.expiryDate || now,
+          status: 'active',
+          holder: data.holder || '',
+          issuingAuthority: data.issuingAuthority || '',
+          declarationIds: [],
+          fileUrl: data.fileUrl,
+          createdAt: now,
+          updatedAt: now,
+        };
+        newLicense.status = calculateLicenseStatus(newLicense.expiryDate);
+        set((state) => ({
+          licenses: [...state.licenses, newLicense],
+          loading: false,
+        }));
+        return newLicense;
+      },
+      updateLicense: async (id: string, data: Partial<License>): Promise<License> => {
+        set({ loading: true });
+        await delay();
+        const now = new Date().toISOString();
+        let updatedLicense!: License;
+        set((state) => {
+          const updatedLicenses = state.licenses.map((l) => {
+            if (l.id === id) {
+              updatedLicense = {
+                ...l,
+                ...data,
+                updatedAt: now,
+                status: calculateLicenseStatus(data.expiryDate || l.expiryDate),
+              };
+              return updatedLicense;
+            }
+            return l;
+          });
+          return {
+            licenses: updatedLicenses,
+            loading: false,
+          };
+        });
+        return updatedLicense;
+      },
+      deleteLicense: async (id: string): Promise<void> => {
+        set({ loading: true });
+        await delay();
+        set((state) => ({
+          licenses: state.licenses.filter((l) => l.id !== id),
+          loading: false,
+        }));
+      },
+      associateLicenseToDeclaration: async (licenseId: string, declarationId: string): Promise<License> => {
+        set({ loading: true });
+        await delay();
+        const now = new Date().toISOString();
+        let updatedLicense!: License;
+        
+        set((state) => {
+          const license = state.licenses.find((l) => l.id === licenseId);
+          const declaration = state.declarations.find((d) => d.id === declarationId);
+          
+          if (!license || !declaration) {
+            return { loading: false };
+          }
+          
+          const updatedDeclarationIds = license.declarationIds.includes(declarationId)
+            ? license.declarationIds
+            : [...license.declarationIds, declarationId];
+          
+          updatedLicense = {
+            ...license,
+            declarationIds: updatedDeclarationIds,
+            updatedAt: now,
+            status: calculateLicenseStatus(license.expiryDate),
+          };
+          
+          const updatedRequiredLicenses = declaration.requiredLicenses.map((req) => {
+            if (req.licenseType === license.licenseType && req.isRequired && !req.isProvided) {
+              return {
+                ...req,
+                isProvided: true,
+                licenseNo: license.licenseNo,
+                expiryDate: license.expiryDate,
+              };
+            }
+            return req;
+          });
+          
+          const allProvided = updatedRequiredLicenses.every(
+            (req) => !req.isRequired || req.isProvided
+          );
+          
+          const updatedDeclarations = state.declarations.map((d) => {
+            if (d.id === declarationId) {
+              return {
+                ...d,
+                requiredLicenses: updatedRequiredLicenses,
+                status: allProvided ? 'ready_to_submit' as CustomsStatus : d.status,
+                updatedAt: now,
+              };
+            }
+            return d;
+          });
+          
+          const updatedLicenses = state.licenses.map((l) =>
+            l.id === licenseId ? updatedLicense : l
+          );
+          
+          return {
+            licenses: updatedLicenses,
+            declarations: updatedDeclarations,
+            currentDeclaration:
+              state.currentDeclaration?.id === declarationId
+                ? updatedDeclarations.find((d) => d.id === declarationId) || null
+                : state.currentDeclaration,
+            loading: false,
+          };
+        });
+        
+        return updatedLicense;
       },
     }),
     {
@@ -657,13 +930,19 @@ export const useLogisticsStore = create<LogisticsState>()(
 interface FinanceState {
   settlements: Settlement[];
   currentSettlement: Settlement | null;
+  paymentApplications: PaymentApplication[];
+  foreignExchangeDeclarations: ForeignExchangeDeclaration[];
   getSettlements: (params?: { status?: SettlementStatus; page?: number; pageSize?: number }) => Promise<void>;
   getSettlement: (id: string) => Promise<Settlement | null>;
   calculateReceivablesPayables: (orderId: string) => Promise<{ receivables: FinanceItem[]; payables: FinanceItem[]; totalReceivable: number; totalPayable: number }>;
   generateSettlementList: (orderId: string) => Promise<Settlement>;
+  getPaymentApplications: () => Promise<PaymentApplication[]>;
   createPaymentApplication: (settlementId: string, data: Partial<PaymentApplication>) => Promise<PaymentApplication>;
   submitPaymentApplication: (appId: string) => Promise<PaymentApplication>;
+  getForeignExchangeDeclarations: () => Promise<ForeignExchangeDeclaration[]>;
+  createForeignExchangeDeclaration: (appId: string, data: Partial<ForeignExchangeDeclaration>) => Promise<ForeignExchangeDeclaration>;
   generateForeignExchangeDeclaration: (appId: string) => Promise<ForeignExchangeDeclaration>;
+  generateElectronicReceipt: (declId: string) => Promise<{ receiptUrl: string; receiptNo: string }>;
   getExchangeRate: (fromCurrency: string, toCurrency: string) => Promise<{ rate: number; date: string }>;
 }
 
@@ -672,6 +951,8 @@ export const useFinanceStore = create<FinanceState>()(
     (set, get) => ({
       settlements: mockSettlements,
       currentSettlement: null,
+      paymentApplications: mockPaymentApplications,
+      foreignExchangeDeclarations: mockForeignExchangeDeclarations,
       getSettlements: async (params?: { status?: SettlementStatus; page?: number; pageSize?: number }): Promise<void> => {
         await delay();
         let filteredSettlements = [...get().settlements];
@@ -768,6 +1049,10 @@ export const useFinanceStore = create<FinanceState>()(
         }));
         return newSettlement;
       },
+      getPaymentApplications: async (): Promise<PaymentApplication[]> => {
+        await delay();
+        return get().paymentApplications;
+      },
       createPaymentApplication: async (settlementId: string, data: Partial<PaymentApplication>): Promise<PaymentApplication> => {
         await delay();
         const now = new Date().toISOString();
@@ -786,45 +1071,90 @@ export const useFinanceStore = create<FinanceState>()(
           createdAt: now,
           updatedAt: now,
         };
+        set((state) => ({
+          paymentApplications: [...state.paymentApplications, newApp],
+        }));
         return newApp;
       },
       submitPaymentApplication: async (appId: string): Promise<PaymentApplication> => {
         await delay();
         const now = new Date().toISOString();
-        return {
-          id: appId,
-          settlementId: '',
-          applicationNo: '',
-          amount: 0,
-          currency: 'USD',
-          payee: '',
-          payeeBank: '',
-          payeeAccount: '',
-          purpose: '',
-          status: 'approved',
-          applicationDate: now,
-          processingDate: now,
+        let updatedApp!: PaymentApplication;
+        set((state) => {
+          const updatedApps = state.paymentApplications.map((app) => {
+            if (app.id === appId) {
+              updatedApp = { ...app, status: 'approved', processingDate: now, updatedAt: now };
+              return updatedApp;
+            }
+            return app;
+          });
+          return { paymentApplications: updatedApps };
+        });
+        return updatedApp;
+      },
+      getForeignExchangeDeclarations: async (): Promise<ForeignExchangeDeclaration[]> => {
+        await delay();
+        return get().foreignExchangeDeclarations;
+      },
+      createForeignExchangeDeclaration: async (appId: string, data: Partial<ForeignExchangeDeclaration>): Promise<ForeignExchangeDeclaration> => {
+        await delay();
+        const now = new Date().toISOString();
+        const newDecl: ForeignExchangeDeclaration = {
+          id: generateId('fx'),
+          paymentApplicationId: appId,
+          declarationNo: data.declarationNo || `FX-${new Date().getFullYear()}-${String(Date.now()).slice(-5)}`,
+          declarationDate: now,
+          amount: data.amount || 0,
+          currency: data.currency || 'USD',
+          exchangeRate: data.exchangeRate || 7.2568,
+          receiptUrl: data.receiptUrl || '',
+          status: data.status || 'pending',
           createdAt: now,
           updatedAt: now,
-          ...{},
-        } as PaymentApplication;
+        };
+        set((state) => ({
+          foreignExchangeDeclarations: [...state.foreignExchangeDeclarations, newDecl],
+        }));
+        return newDecl;
       },
       generateForeignExchangeDeclaration: async (appId: string): Promise<ForeignExchangeDeclaration> => {
         await delay();
         const now = new Date().toISOString();
-        return {
+        const paymentApp = get().paymentApplications.find((p) => p.id === appId);
+        const { rate } = await get().getExchangeRate(paymentApp?.currency || 'USD', 'CNY');
+        const newDecl: ForeignExchangeDeclaration = {
           id: generateId('fx'),
           paymentApplicationId: appId,
           declarationNo: `FX-${new Date().getFullYear()}-${String(Date.now()).slice(-5)}`,
           declarationDate: now,
-          amount: 21512.5,
-          currency: 'USD',
-          exchangeRate: 7.2568,
+          amount: paymentApp?.amount || 0,
+          currency: paymentApp?.currency || 'USD',
+          exchangeRate: rate,
           receiptUrl: `/receipts/${appId}.pdf`,
           status: 'submitted',
           createdAt: now,
           updatedAt: now,
         };
+        set((state) => ({
+          foreignExchangeDeclarations: [...state.foreignExchangeDeclarations, newDecl],
+        }));
+        return newDecl;
+      },
+      generateElectronicReceipt: async (declId: string): Promise<{ receiptUrl: string; receiptNo: string }> => {
+        await delay();
+        const declaration = get().foreignExchangeDeclarations.find((d) => d.id === declId);
+        const receiptUrl = `/receipts/${declId}.pdf`;
+        const receiptNo = declaration?.declarationNo || `REC-${Date.now()}`;
+        set((state) => {
+          const updatedDecls = state.foreignExchangeDeclarations.map((d) => {
+            if (d.id === declId) {
+              return { ...d, receiptUrl, updatedAt: new Date().toISOString() };
+            }
+            return d;
+          });
+          return { foreignExchangeDeclarations: updatedDecls };
+        });
+        return { receiptUrl, receiptNo };
       },
       getExchangeRate: async (fromCurrency: string, toCurrency: string): Promise<{ rate: number; date: string }> => {
         await delay();
@@ -853,7 +1183,10 @@ interface NotificationState {
   markAsRead: (notificationId: string) => Promise<Notification>;
   markAllAsRead: (userId: string) => Promise<boolean>;
   getUnreadCount: (userId: string) => Promise<number>;
+  deleteNotification: (id: string) => Promise<void>;
+  deleteNotifications: (ids: string[]) => Promise<void>;
   pushNotification: (notification: Omit<Notification, 'id' | 'createdAt' | 'updatedAt' | 'isRead'>) => Promise<boolean>;
+  sendNotification: (userIds: string[], notification: Omit<Notification, 'id' | 'userId' | 'createdAt' | 'updatedAt' | 'isRead'>) => Promise<boolean>;
 }
 
 export const useNotificationStore = create<NotificationState>()(
@@ -916,6 +1249,32 @@ export const useNotificationStore = create<NotificationState>()(
         set({ unreadCount: count });
         return count;
       },
+      deleteNotification: async (id: string): Promise<void> => {
+        await delay();
+        set((state) => {
+          const notification = state.notifications.find((n) => n.id === id);
+          const updatedNotifications = state.notifications.filter((n) => n.id !== id);
+          const unreadDelta = notification && !notification.isRead ? -1 : 0;
+          return {
+            notifications: updatedNotifications,
+            unreadCount: Math.max(0, state.unreadCount + unreadDelta),
+          };
+        });
+      },
+      deleteNotifications: async (ids: string[]): Promise<void> => {
+        await delay();
+        set((state) => {
+          const idSet = new Set(ids);
+          const deletedUnread = state.notifications.filter(
+            (n) => idSet.has(n.id) && !n.isRead
+          ).length;
+          const updatedNotifications = state.notifications.filter((n) => !idSet.has(n.id));
+          return {
+            notifications: updatedNotifications,
+            unreadCount: Math.max(0, state.unreadCount - deletedUnread),
+          };
+        });
+      },
       pushNotification: async (notification: Omit<Notification, 'id' | 'createdAt' | 'updatedAt' | 'isRead'>): Promise<boolean> => {
         await delay();
         const now = new Date().toISOString();
@@ -929,6 +1288,26 @@ export const useNotificationStore = create<NotificationState>()(
         set((state) => ({
           notifications: [newNotification, ...state.notifications],
           unreadCount: state.unreadCount + 1,
+        }));
+        return true;
+      },
+      sendNotification: async (
+        userIds: string[],
+        notification: Omit<Notification, 'id' | 'userId' | 'createdAt' | 'updatedAt' | 'isRead'>
+      ): Promise<boolean> => {
+        await delay();
+        const now = new Date().toISOString();
+        const newNotifications: Notification[] = userIds.map((userId) => ({
+          id: generateId('notif'),
+          userId,
+          isRead: false,
+          createdAt: now,
+          updatedAt: now,
+          ...notification,
+        }));
+        set((state) => ({
+          notifications: [...newNotifications, ...state.notifications],
+          unreadCount: state.unreadCount + newNotifications.length,
         }));
         return true;
       },
@@ -1011,6 +1390,190 @@ export const usePerformanceStore = create<PerformanceState>()(
     }),
     {
       name: 'performance-storage',
+    }
+  )
+);
+
+interface LetterOfCreditState {
+  lettersOfCredit: LetterOfCredit[];
+  currentLC: LetterOfCredit | null;
+  loading: boolean;
+  getLCByOrderId: (orderId: string) => Promise<LetterOfCredit | null>;
+  generateDraft: (orderId: string) => Promise<LetterOfCredit>;
+  sendForConfirmation: (lcId: string) => Promise<LetterOfCredit>;
+  confirmLC: (lcId: string) => Promise<LetterOfCredit>;
+  rejectLC: (lcId: string, reason: string) => Promise<LetterOfCredit>;
+}
+
+export const useLetterOfCreditStore = create<LetterOfCreditState>()(
+  persist(
+    (set, get) => ({
+      lettersOfCredit: mockLettersOfCredit,
+      currentLC: null,
+      loading: false,
+      getLCByOrderId: async (orderId: string): Promise<LetterOfCredit | null> => {
+        await delay();
+        const lc = get().lettersOfCredit.find((lc) => lc.orderId === orderId) || null;
+        set({ currentLC: lc });
+        return lc;
+      },
+      generateDraft: async (orderId: string): Promise<LetterOfCredit> => {
+        set({ loading: true });
+        await delay();
+        const orderStore = useOrderStore.getState();
+        const order = orderStore.orders.find((o) => o.id === orderId);
+        if (!order) {
+          set({ loading: false });
+          throw new Error('订单不存在');
+        }
+
+        const existingLC = get().lettersOfCredit.find((lc) => lc.orderId === orderId);
+        if (existingLC) {
+          set({ loading: false, currentLC: existingLC });
+          return existingLC;
+        }
+
+        const now = new Date().toISOString();
+        const newLC: LetterOfCredit = {
+          id: generateId('lc'),
+          orderId,
+          lcNo: `LC-${new Date().getFullYear()}-${String(Date.now()).slice(-5)}`,
+          issuingBank: '中国工商银行上海分行',
+          advisingBank: '国际银行海外分行',
+          beneficiary: order.exporterId,
+          applicant: order.importerId,
+          amount: order.totalAmount,
+          currency: order.currency,
+          expiryDate: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
+          latestShipmentDate: new Date(Date.now() + 45 * 24 * 60 * 60 * 1000).toISOString(),
+          terms: `${order.tradeTerm} 目的港，凭全套清洁已装船提单议付，发票注明信用证号`,
+          status: 'draft',
+          version: 1,
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        set((state) => ({
+          lettersOfCredit: [...state.lettersOfCredit, newLC],
+          currentLC: newLC,
+          loading: false,
+        }));
+
+        useOrderStore.setState({
+          orders: orderStore.orders.map((o) =>
+            o.id === orderId ? { ...o, letterOfCredit: newLC, updatedAt: now } : o
+          ),
+          currentOrder: orderStore.currentOrder?.id === orderId
+            ? { ...orderStore.currentOrder, letterOfCredit: newLC }
+            : orderStore.currentOrder,
+        });
+
+        return newLC;
+      },
+      sendForConfirmation: async (lcId: string): Promise<LetterOfCredit> => {
+        set({ loading: true });
+        await delay();
+        let updatedLC!: LetterOfCredit;
+        const now = new Date().toISOString();
+        set((state) => {
+          const updatedLCs = state.lettersOfCredit.map((lc) => {
+            if (lc.id === lcId) {
+              updatedLC = { ...lc, status: 'pending_exporter_confirm' as LCStatus, updatedAt: now };
+              return updatedLC;
+            }
+            return lc;
+          });
+          return {
+            lettersOfCredit: updatedLCs,
+            currentLC: state.currentLC?.id === lcId ? updatedLC : state.currentLC,
+            loading: false,
+          };
+        });
+
+        const orderStore = useOrderStore.getState();
+        useOrderStore.setState({
+          orders: orderStore.orders.map((o) =>
+            o.id === updatedLC.orderId ? { ...o, letterOfCredit: updatedLC, updatedAt: now } : o
+          ),
+          currentOrder: orderStore.currentOrder?.id === updatedLC.orderId
+            ? { ...orderStore.currentOrder, letterOfCredit: updatedLC }
+            : orderStore.currentOrder,
+        });
+
+        return updatedLC;
+      },
+      confirmLC: async (lcId: string): Promise<LetterOfCredit> => {
+        set({ loading: true });
+        await delay();
+        let updatedLC!: LetterOfCredit;
+        const now = new Date().toISOString();
+        set((state) => {
+          const updatedLCs = state.lettersOfCredit.map((lc) => {
+            if (lc.id === lcId) {
+              updatedLC = { ...lc, status: 'exporter_confirmed' as LCStatus, updatedAt: now };
+              return updatedLC;
+            }
+            return lc;
+          });
+          return {
+            lettersOfCredit: updatedLCs,
+            currentLC: state.currentLC?.id === lcId ? updatedLC : state.currentLC,
+            loading: false,
+          };
+        });
+
+        const orderStore = useOrderStore.getState();
+        useOrderStore.setState({
+          orders: orderStore.orders.map((o) =>
+            o.id === updatedLC.orderId ? { ...o, letterOfCredit: updatedLC, updatedAt: now } : o
+          ),
+          currentOrder: orderStore.currentOrder?.id === updatedLC.orderId
+            ? { ...orderStore.currentOrder, letterOfCredit: updatedLC }
+            : orderStore.currentOrder,
+        });
+
+        return updatedLC;
+      },
+      rejectLC: async (lcId: string, reason: string): Promise<LetterOfCredit> => {
+        set({ loading: true });
+        await delay();
+        let updatedLC!: LetterOfCredit;
+        const now = new Date().toISOString();
+        set((state) => {
+          const updatedLCs = state.lettersOfCredit.map((lc) => {
+            if (lc.id === lcId) {
+              updatedLC = {
+                ...lc,
+                status: 'exporter_rejected' as LCStatus,
+                terms: lc.terms + `\n\n驳回原因: ${reason}`,
+                updatedAt: now,
+              };
+              return updatedLC;
+            }
+            return lc;
+          });
+          return {
+            lettersOfCredit: updatedLCs,
+            currentLC: state.currentLC?.id === lcId ? updatedLC : state.currentLC,
+            loading: false,
+          };
+        });
+
+        const orderStore = useOrderStore.getState();
+        useOrderStore.setState({
+          orders: orderStore.orders.map((o) =>
+            o.id === updatedLC.orderId ? { ...o, letterOfCredit: updatedLC, updatedAt: now } : o
+          ),
+          currentOrder: orderStore.currentOrder?.id === updatedLC.orderId
+            ? { ...orderStore.currentOrder, letterOfCredit: updatedLC }
+            : orderStore.currentOrder,
+        });
+
+        return updatedLC;
+      },
+    }),
+    {
+      name: 'lc-storage',
     }
   )
 );

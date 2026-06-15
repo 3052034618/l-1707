@@ -13,6 +13,8 @@ import type {
   CustomsStatus,
   RegulatoryCondition,
   LicenseRequirement,
+  License,
+  LicenseStatus,
   Shipment,
   ShipmentStatus,
   Location,
@@ -459,6 +461,7 @@ export const DocumentService = {
 
     const orders = getData('orders') || [];
     const orderIndex = orders.findIndex((o) => o.id === orderId);
+    const order = orders[orderIndex];
     if (orderIndex !== -1) {
       orders[orderIndex] = {
         ...orders[orderIndex],
@@ -467,6 +470,21 @@ export const DocumentService = {
         updatedAt: now(),
       };
       setData('orders', orders);
+    }
+
+    if (!result.isPassed && order) {
+      const userIds = [order.importerId, order.exporterId].filter(Boolean);
+      if (userIds.length > 0) {
+        NotificationService.pushNotification(userIds, {
+          type: 'document_discrepancy',
+          severity: 'error',
+          title: '单证校验发现不符点',
+          message: `订单 ${order.orderNo} 的单证校验发现 ${discrepancies.length} 个不符点，请及时处理。`,
+          relatedEntityId: orderId,
+          relatedEntityType: 'order',
+          actionUrl: `/orders/${orderId}/documents`,
+        });
+      }
     }
 
     return result;
@@ -557,13 +575,16 @@ export const CustomsService = {
 
     const regConditions = await this.checkRegulatoryConditions(order.hsCode, order.originCountry);
     const licenseReqs = await this.checkLicenseRequirements(order.hsCode);
+    
+    const hasMissingLicense = licenseReqs.some((l) => l.isRequired && !l.isProvided);
+    const initialStatus = hasMissingLicense ? 'license_missing' : (data.status || 'draft');
 
     const newDeclaration: CustomsDeclaration = {
       id: generateId('customs'),
       orderId,
       declarationNo: `CUS-${new Date().getFullYear()}-SH-${String(Date.now()).slice(-7)}`,
       customsBrokerId: currentUserId || users.find((u) => u.role === 'customs')?.id || '',
-      status: data.status || 'draft',
+      status: initialStatus,
       hsCode: data.hsCode || order.hsCode,
       goodsDescription: data.goodsDescription || order.goodsDescription,
       quantity: data.quantity !== undefined ? data.quantity : order.quantity,
@@ -582,6 +603,22 @@ export const CustomsService = {
 
     order.customsDeclaration = newDeclaration;
     setData('orders', orders);
+
+    if (hasMissingLicense) {
+      const missingCount = licenseReqs.filter((l) => l.isRequired && !l.isProvided).length;
+      const userIds = [newDeclaration.customsBrokerId, order.importerId].filter(Boolean);
+      if (userIds.length > 0) {
+        NotificationService.pushNotification(userIds, {
+          type: 'license_missing',
+          severity: 'warning',
+          title: '报关单许可证缺失预警',
+          message: `报关单 ${newDeclaration.declarationNo} 缺少 ${missingCount} 个必需的许可证，请及时处理。`,
+          relatedEntityId: newDeclaration.id,
+          relatedEntityType: 'customs_declaration',
+          actionUrl: `/customs/declarations/${newDeclaration.id}`,
+        });
+      }
+    }
 
     return newDeclaration;
   },
@@ -745,6 +782,173 @@ export const CustomsService = {
 </Declaration>`;
 
     return { messageContent, messageFormat: 'XML' };
+  },
+};
+
+const calculateLicenseStatus = (expiryDate: string): LicenseStatus => {
+  const now = Date.now();
+  const expiry = new Date(expiryDate).getTime();
+  const diffDays = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
+  
+  if (diffDays <= 0) return 'expired';
+  if (diffDays <= 30) return 'expiring_soon';
+  return 'active';
+};
+
+export const LicenseService = {
+  async getLicenses(params?: { status?: LicenseStatus; page?: number; pageSize?: number }): Promise<{ data: License[]; total: number }> {
+    await delay();
+    let licenses = getData('licenses') || [];
+    
+    licenses = licenses.map((lic: License) => ({
+      ...lic,
+      status: calculateLicenseStatus(lic.expiryDate),
+    }));
+    
+    if (params?.status) {
+      licenses = licenses.filter((l: License) => l.status === params.status);
+    }
+    
+    const total = licenses.length;
+    
+    if (params?.page !== undefined && params?.pageSize !== undefined) {
+      const start = (params.page - 1) * params.pageSize;
+      const end = start + params.pageSize;
+      licenses = licenses.slice(start, end);
+    }
+    
+    return { data: licenses, total };
+  },
+
+  async getLicenseById(id: string): Promise<License> {
+    await delay();
+    const licenses = getData('licenses') || [];
+    const license = licenses.find((l: License) => l.id === id);
+    if (!license) {
+      throw new Error('许可证不存在');
+    }
+    return {
+      ...license,
+      status: calculateLicenseStatus(license.expiryDate),
+    };
+  },
+
+  async addLicense(data: Partial<License>): Promise<License> {
+    await delay();
+    const licenses = getData('licenses') || [];
+    const nowTime = now();
+    
+    const newLicense: License = {
+      id: generateId('lic'),
+      licenseType: data.licenseType || '',
+      licenseName: data.licenseName || '',
+      licenseNo: data.licenseNo || '',
+      issueDate: data.issueDate || nowTime,
+      expiryDate: data.expiryDate || nowTime,
+      status: 'active',
+      holder: data.holder || '',
+      issuingAuthority: data.issuingAuthority || '',
+      declarationIds: [],
+      fileUrl: data.fileUrl,
+      createdAt: nowTime,
+      updatedAt: nowTime,
+    };
+    
+    newLicense.status = calculateLicenseStatus(newLicense.expiryDate);
+    licenses.push(newLicense);
+    setData('licenses', licenses);
+    
+    return newLicense;
+  },
+
+  async updateLicense(id: string, data: Partial<License>): Promise<License> {
+    await delay();
+    const licenses = getData('licenses') || [];
+    const index = licenses.findIndex((l: License) => l.id === id);
+    if (index === -1) {
+      throw new Error('许可证不存在');
+    }
+    
+    const updatedLicense: License = {
+      ...licenses[index],
+      ...data,
+      updatedAt: now(),
+    };
+    
+    updatedLicense.status = calculateLicenseStatus(updatedLicense.expiryDate);
+    licenses[index] = updatedLicense;
+    setData('licenses', licenses);
+    
+    return updatedLicense;
+  },
+
+  async deleteLicense(id: string): Promise<void> {
+    await delay();
+    const licenses = getData('licenses') || [];
+    const filtered = licenses.filter((l: License) => l.id !== id);
+    setData('licenses', filtered);
+  },
+
+  async associateLicenseToDeclaration(licenseId: string, declarationId: string): Promise<License> {
+    await delay();
+    const licenses = getData('licenses') || [];
+    const declarations = getData('customsDeclarations') || [];
+    
+    const licenseIndex = licenses.findIndex((l: License) => l.id === licenseId);
+    if (licenseIndex === -1) {
+      throw new Error('许可证不存在');
+    }
+    
+    const declarationIndex = declarations.findIndex((d: CustomsDeclaration) => d.id === declarationId);
+    if (declarationIndex === -1) {
+      throw new Error('报关单不存在');
+    }
+    
+    if (!licenses[licenseIndex].declarationIds.includes(declarationId)) {
+      licenses[licenseIndex].declarationIds.push(declarationId);
+    }
+    licenses[licenseIndex].updatedAt = now();
+    
+    const license = licenses[licenseIndex];
+    const declaration = declarations[declarationIndex];
+    
+    const updatedRequiredLicenses = declaration.requiredLicenses.map((req: LicenseRequirement) => {
+      if (req.licenseType === license.licenseType && req.isRequired && !req.isProvided) {
+        return {
+          ...req,
+          isProvided: true,
+          licenseNo: license.licenseNo,
+          expiryDate: license.expiryDate,
+        };
+      }
+      return req;
+    });
+    
+    const allProvided = updatedRequiredLicenses.every((req: LicenseRequirement) => !req.isRequired || req.isProvided);
+    
+    declarations[declarationIndex] = {
+      ...declaration,
+      requiredLicenses: updatedRequiredLicenses,
+      status: allProvided ? 'ready_to_submit' : declaration.status,
+      updatedAt: now(),
+    };
+    
+    setData('licenses', licenses);
+    setData('customsDeclarations', declarations);
+    
+    const orders = getData('orders') || [];
+    const orderIndex = orders.findIndex((o: Order) => o.id === declarations[declarationIndex].orderId);
+    if (orderIndex !== -1) {
+      orders[orderIndex].customsDeclaration = declarations[declarationIndex];
+      setData('orders', orders);
+    }
+    
+    const updatedLicense = {
+      ...licenses[licenseIndex],
+      status: calculateLicenseStatus(licenses[licenseIndex].expiryDate),
+    };
+    
+    return updatedLicense;
   },
 };
 
@@ -938,6 +1142,8 @@ export const LogisticsService = {
     }
 
     const shipmentIndex = shipments.findIndex((s) => s.id === shipmentId);
+    const wasDelayed = shipment?.isDelayed;
+    
     if (shipmentIndex !== -1) {
       shipments[shipmentIndex] = {
         ...shipments[shipmentIndex],
@@ -948,6 +1154,35 @@ export const LogisticsService = {
         updatedAt: now(),
       };
       setData('shipments', shipments);
+    }
+
+    if (isDelayed && !wasDelayed && shipment) {
+      const orders = getData('orders') || [];
+      const order = orders.find((o) => o.id === shipment.orderId);
+      
+      if (order) {
+        const users = getData('users') || [];
+        const customsUser = users.find((u: User) => u.role === 'customs');
+        
+        const userIds = [
+          order.importerId,
+          order.exporterId,
+          shipment.logisticsProviderId,
+          customsUser?.id,
+        ].filter(Boolean) as string[];
+        
+        if (userIds.length > 0) {
+          NotificationService.pushNotification([...new Set(userIds)], {
+            type: 'shipment_delay',
+            severity: 'warning',
+            title: '船期延误预警',
+            message: `订单 ${order.orderNo} 的货运已延误 ${delayHours} 小时，原因：${reason || '待确认'}。`,
+            relatedEntityId: shipmentId,
+            relatedEntityType: 'shipment',
+            actionUrl: `/logistics/shipments/${shipmentId}`,
+          });
+        }
+      }
     }
 
     return { isDelayed, delayHours, reason };
@@ -1487,7 +1722,7 @@ export const NotificationService = {
     return notifications.filter((n) => n.userId === userId && !n.isRead).length;
   },
 
-  async pushNotification(users: string[], notification: Omit<Notification, 'id' | 'createdAt' | 'updatedAt' | 'isRead'>): Promise<boolean> {
+  async pushNotification(users: string[], notification: Omit<Notification, 'id' | 'userId' | 'createdAt' | 'updatedAt' | 'isRead'>): Promise<boolean> {
     await delay();
     const notifications = getData('notifications') || [];
     const newNotifications: Notification[] = users.map((userId) => ({

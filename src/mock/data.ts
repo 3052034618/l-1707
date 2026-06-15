@@ -4,8 +4,11 @@ import type {
   LetterOfCredit,
   Document,
   CustomsDeclaration,
+  License,
   Shipment,
   Settlement,
+  PaymentApplication,
+  ForeignExchangeDeclaration,
   Notification,
   PerformanceReport
 } from '@/types';
@@ -267,6 +270,51 @@ export const mockCustomsDeclarations: CustomsDeclaration[] = [
     ],
     declarationMessage: '<?xml version="1.0" encoding="UTF-8"?><Declaration><Header>...</Header><Body>...</Body></Declaration>'
   }
+];
+
+export const mockLicenses: License[] = [
+  {
+    id: 'lic_001',
+    licenseType: '3C认证',
+    licenseName: '中国强制性产品认证证书',
+    licenseNo: 'CCC2026010901123456',
+    issueDate: '2025-06-15T00:00:00Z',
+    expiryDate: '2028-06-30T00:00:00Z',
+    status: 'active',
+    holder: '华盛进出口贸易有限公司',
+    issuingAuthority: '中国认证认可监督管理委员会',
+    declarationIds: ['customs_001'],
+    createdAt: '2025-06-15T00:00:00Z',
+    updatedAt: '2025-06-15T00:00:00Z',
+  },
+  {
+    id: 'lic_002',
+    licenseType: '入境通关单',
+    licenseName: '入境货物通关单',
+    licenseNo: 'SH2026061000123456',
+    issueDate: '2026-06-10T00:00:00Z',
+    expiryDate: '2026-07-10T00:00:00Z',
+    status: 'expiring_soon',
+    holder: '华盛进出口贸易有限公司',
+    issuingAuthority: '上海出入境检验检疫局',
+    declarationIds: ['customs_001'],
+    createdAt: '2026-06-10T00:00:00Z',
+    updatedAt: '2026-06-10T00:00:00Z',
+  },
+  {
+    id: 'lic_003',
+    licenseType: '进口许可证',
+    licenseName: '两用物项和技术进口许可证',
+    licenseNo: 'IMPORT202506001234',
+    issueDate: '2025-06-01T00:00:00Z',
+    expiryDate: '2026-06-01T00:00:00Z',
+    status: 'expired',
+    holder: '华盛进出口贸易有限公司',
+    issuingAuthority: '商务部',
+    declarationIds: [],
+    createdAt: '2025-06-01T00:00:00Z',
+    updatedAt: '2025-06-01T00:00:00Z',
+  },
 ];
 
 export const mockShipments: Shipment[] = [
@@ -641,6 +689,85 @@ export const mockNotifications: Notification[] = [
     createdAt: '2026-06-14T14:00:00Z',
     updatedAt: '2026-06-14T15:00:00Z'
   }
+];
+
+export const mockPaymentApplications: PaymentApplication[] = [
+  {
+    id: 'payapp_001',
+    settlementId: 'settlement_001',
+    applicationNo: 'PAY-2026-0000001',
+    amount: 21512.5,
+    currency: 'USD',
+    payee: '万达制造有限公司',
+    payeeBank: '中国银行上海分行',
+    payeeAccount: '6228480012345678901',
+    purpose: '货款支付',
+    status: 'pending',
+    applicationDate: '2026-06-15T10:00:00Z',
+    createdAt: '2026-06-15T10:00:00Z',
+    updatedAt: '2026-06-15T10:00:00Z',
+  },
+  {
+    id: 'payapp_002',
+    settlementId: 'settlement_002',
+    applicationNo: 'PAY-2026-0000002',
+    amount: 15800.0,
+    currency: 'EUR',
+    payee: '德国电子科技公司',
+    payeeBank: '德意志银行',
+    payeeAccount: 'DE89370400440532013000',
+    purpose: '货款支付',
+    status: 'approved',
+    applicationDate: '2026-06-10T14:30:00Z',
+    processingDate: '2026-06-12T09:00:00Z',
+    createdAt: '2026-06-10T14:30:00Z',
+    updatedAt: '2026-06-12T09:00:00Z',
+  },
+  {
+    id: 'payapp_003',
+    settlementId: 'settlement_003',
+    applicationNo: 'PAY-2026-0000003',
+    amount: 8900.0,
+    currency: 'USD',
+    payee: '中远海运集装箱运输有限公司',
+    payeeBank: '中国建设银行',
+    payeeAccount: '6227001210001234567',
+    purpose: '运费支付',
+    status: 'processed',
+    applicationDate: '2026-06-05T11:00:00Z',
+    processingDate: '2026-06-06T10:00:00Z',
+    createdAt: '2026-06-05T11:00:00Z',
+    updatedAt: '2026-06-06T10:00:00Z',
+  },
+];
+
+export const mockForeignExchangeDeclarations: ForeignExchangeDeclaration[] = [
+  {
+    id: 'forex_001',
+    paymentApplicationId: 'payapp_002',
+    declarationNo: 'FX-2026-0000001',
+    declarationDate: '2026-06-13T10:00:00Z',
+    amount: 15800.0,
+    currency: 'EUR',
+    exchangeRate: 7.8945,
+    receiptUrl: '/receipts/forex_001.pdf',
+    status: 'approved',
+    createdAt: '2026-06-13T10:00:00Z',
+    updatedAt: '2026-06-13T14:30:00Z',
+  },
+  {
+    id: 'forex_002',
+    paymentApplicationId: 'payapp_003',
+    declarationNo: 'FX-2026-0000002',
+    declarationDate: '2026-06-07T11:00:00Z',
+    amount: 8900.0,
+    currency: 'USD',
+    exchangeRate: 7.2568,
+    receiptUrl: '/receipts/forex_002.pdf',
+    status: 'submitted',
+    createdAt: '2026-06-07T11:00:00Z',
+    updatedAt: '2026-06-07T11:00:00Z',
+  },
 ];
 
 export const mockPerformanceReports: PerformanceReport[] = [

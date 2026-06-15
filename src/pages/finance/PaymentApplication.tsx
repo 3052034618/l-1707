@@ -43,59 +43,9 @@ const purposeOptions: SelectOption[] = [
   { value: '其他', label: '其他' },
 ];
 
-const mockPaymentApplications: PaymentApplication[] = [
-  {
-    id: 'payapp_001',
-    settlementId: 'settlement_001',
-    applicationNo: 'PAY-2026-0000001',
-    amount: 21512.5,
-    currency: 'USD',
-    payee: '万达制造有限公司',
-    payeeBank: '中国银行上海分行',
-    payeeAccount: '6228480012345678901',
-    purpose: '货款支付',
-    status: 'pending',
-    applicationDate: '2026-06-15T10:00:00Z',
-    createdAt: '2026-06-15T10:00:00Z',
-    updatedAt: '2026-06-15T10:00:00Z',
-  },
-  {
-    id: 'payapp_002',
-    settlementId: 'settlement_002',
-    applicationNo: 'PAY-2026-0000002',
-    amount: 15800.0,
-    currency: 'EUR',
-    payee: '德国电子科技公司',
-    payeeBank: '德意志银行',
-    payeeAccount: 'DE89370400440532013000',
-    purpose: '货款支付',
-    status: 'approved',
-    applicationDate: '2026-06-10T14:30:00Z',
-    processingDate: '2026-06-12T09:00:00Z',
-    createdAt: '2026-06-10T14:30:00Z',
-    updatedAt: '2026-06-12T09:00:00Z',
-  },
-  {
-    id: 'payapp_003',
-    settlementId: 'settlement_003',
-    applicationNo: 'PAY-2026-0000003',
-    amount: 8900.0,
-    currency: 'USD',
-    payee: '中远海运集装箱运输有限公司',
-    payeeBank: '中国建设银行',
-    payeeAccount: '6227001210001234567',
-    purpose: '运费支付',
-    status: 'processed',
-    applicationDate: '2026-06-05T11:00:00Z',
-    processingDate: '2026-06-06T10:00:00Z',
-    createdAt: '2026-06-05T11:00:00Z',
-    updatedAt: '2026-06-06T10:00:00Z',
-  },
-];
-
 export default function PaymentApplicationPage() {
   const navigate = useNavigate();
-  const { settlements, createPaymentApplication, submitPaymentApplication } = useFinanceStore();
+  const { settlements, paymentApplications, createPaymentApplication, submitPaymentApplication } = useFinanceStore();
   const [showNewForm, setShowNewForm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [selectedSettlement, setSelectedSettlement] = useState('');
@@ -106,7 +56,6 @@ export default function PaymentApplicationPage() {
   const [currency, setCurrency] = useState('USD');
   const [purpose, setPurpose] = useState('');
   const [files, setFiles] = useState<File[]>([]);
-  const [paymentApplications] = useState<PaymentApplication[]>(mockPaymentApplications);
 
   const handleSubmit = async () => {
     if (!selectedSettlement || !payee || !payeeBank || !payeeAccount || !amount || !purpose) {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Package,
   FileText,
@@ -18,7 +18,6 @@ import Button from '@/components/Button';
 import Card from '@/components/Card';
 import StatusBadge from '@/components/business/StatusBadge';
 import DiscrepancyCard from '@/components/business/DiscrepancyCard';
-import { DocumentService } from '@/services';
 import { useOrderStore, useDocumentStore } from '@/store';
 import type {
   Order,
@@ -54,15 +53,22 @@ interface FieldComparison {
 
 export default function DocumentVerify() {
   const { orders, getOrders } = useOrderStore();
-  const { documents, getDocuments } = useDocumentStore();
+  const { documents, getDocuments, verifyDocuments, resolveDiscrepancy, generateElectronicPackage } = useDocumentStore();
   const [selectedOrderId, setSelectedOrderId] = useState<string>('');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
-  const [orderDocuments, setOrderDocuments] = useState<Document[]>([]);
-  const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [discrepancyFilter, setDiscrepancyFilter] = useState<string>('all');
   const [orderOptions, setOrderOptions] = useState<SelectOption[]>([]);
+
+  const orderDocuments = useMemo(() => {
+    return documents.filter((d) => d.orderId === selectedOrderId);
+  }, [documents, selectedOrderId]);
+
+  const verificationResult = useMemo<VerificationResult | null>(() => {
+    const verifiedDoc = orderDocuments.find((d) => d.verificationResult);
+    return verifiedDoc?.verificationResult || null;
+  }, [orderDocuments]);
 
   useEffect(() => {
     loadOrders();
@@ -73,9 +79,6 @@ export default function DocumentVerify() {
     setSelectedOrder(order || null);
     if (selectedOrderId) {
       loadDocuments(selectedOrderId);
-    } else {
-      setOrderDocuments([]);
-      setVerificationResult(null);
     }
   }, [selectedOrderId, orders]);
 
@@ -98,13 +101,7 @@ export default function DocumentVerify() {
   const loadDocuments = async (orderId: string) => {
     setLoading(true);
     try {
-      const docs = await getDocuments(orderId);
-      setOrderDocuments(docs);
-
-      const verifiedDoc = docs.find((d) => d.verificationResult);
-      if (verifiedDoc?.verificationResult) {
-        setVerificationResult(verifiedDoc.verificationResult);
-      }
+      await getDocuments(orderId);
     } finally {
       setLoading(false);
     }
@@ -115,9 +112,7 @@ export default function DocumentVerify() {
 
     setVerifying(true);
     try {
-      const result = await DocumentService.verifyDocuments(selectedOrderId);
-      setVerificationResult(result);
-      await loadDocuments(selectedOrderId);
+      await verifyDocuments(selectedOrderId);
     } catch (error) {
       console.error('单证校验失败:', error);
       alert('校验失败，请重试');
@@ -130,8 +125,7 @@ export default function DocumentVerify() {
     try {
       const blDoc = orderDocuments.find((d) => d.documentType === 'bill_of_lading');
       if (blDoc) {
-        await DocumentService.resolveDiscrepancy(blDoc.id, field, resolution);
-        await loadDocuments(selectedOrderId);
+        await resolveDiscrepancy(blDoc.id, field, resolution);
       }
     } catch (error) {
       console.error('解决不符点失败:', error);
@@ -142,7 +136,7 @@ export default function DocumentVerify() {
   const handleGeneratePackage = async () => {
     if (!selectedOrderId) return;
     try {
-      const result = await DocumentService.generateElectronicPackage(selectedOrderId);
+      const result = await generateElectronicPackage(selectedOrderId);
       console.log('生成交单包:', result);
       alert(`电子交单包已生成：${result.packageName}`);
     } catch (error) {

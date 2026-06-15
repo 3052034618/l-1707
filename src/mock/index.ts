@@ -18,7 +18,8 @@ import type {
   Shipment,
   Settlement,
   Notification,
-  PerformanceReport
+  PerformanceReport,
+  License,
 } from '@/types';
 
 type StorageKey =
@@ -31,6 +32,7 @@ type StorageKey =
   | 'settlements'
   | 'notifications'
   | 'performanceReports'
+  | 'licenses'
   | 'mockInitialized';
 
 type StorageValueMap = {
@@ -43,6 +45,7 @@ type StorageValueMap = {
   settlements: Settlement[];
   notifications: Notification[];
   performanceReports: PerformanceReport[];
+  licenses: License[];
   mockInitialized: boolean;
 };
 

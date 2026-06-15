@@ -9,8 +9,7 @@ import Input from '@/components/Input';
 import StatusBadge from '@/components/business/StatusBadge';
 import DocumentUploadZone from '@/components/business/DocumentUploadZone';
 import type { UploadedFile } from '@/components/business/DocumentUploadZone';
-import { DocumentService } from '@/services';
-import { useOrderStore } from '@/store';
+import { useOrderStore, useDocumentStore } from '@/store';
 import type { Document, DocumentType, Order } from '@/types';
 
 const documentTypeOptions: SelectOption[] = [
@@ -82,6 +81,7 @@ const formatFileSize = (bytes: number): string => {
 
 export default function DocumentUpload() {
   const { orders, getOrders } = useOrderStore();
+  const { uploadDocument, verifyDocuments } = useDocumentStore();
   const [selectedOrderId, setSelectedOrderId] = useState<string>('');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [uploadedDocs, setUploadedDocs] = useState<UploadedDocument[]>([]);
@@ -185,16 +185,17 @@ export default function DocumentUpload() {
     try {
       for (const doc of uploadedDocs) {
         if (!doc.document) {
-          const uploaded = await DocumentService.uploadDocument(
+          const uploaded = await uploadDocument(
             selectedOrderId,
             doc.file,
-            doc.documentType
+            doc.documentType,
+            doc.ocrData
           );
           doc.document = uploaded;
         }
       }
 
-      await DocumentService.verifyDocuments(selectedOrderId);
+      await verifyDocuments(selectedOrderId);
       alert('单证提交成功，已自动触发校验！');
       setUploadedDocs([]);
     } catch (error) {
